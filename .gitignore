@@ -1,0 +1,10 @@
+# sessão logada (NUNCA commitar — cookies/sessionid)
+browser_profile/
+# saídas em runtime
+output/
+*.log
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
