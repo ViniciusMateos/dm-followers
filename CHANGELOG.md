@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.0] — 2026-06-26
+## [1.0.0] — 2026-06-26
 
 ### Adicionado
 - feat: worker que manda DM pros novos seguidores lidos da aba de notificações
