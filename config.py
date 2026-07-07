@@ -2,7 +2,7 @@
 Configuração do worker dm_followers — manda DM pros novos seguidores.
 
 Lê a aba de notificações ("começou a seguir você"), processa do mais antigo pro
-mais recente, manda a mensagem (com o @ da pessoa na 1ª linha) e salva o último
+mais recente, manda a mensagem (com o nick da pessoa na 1ª linha) e salva o último
 processado pra retomar. DM é o automatismo de MAIOR risco de ban — caps minúsculos.
 
 Endpoints em ../../DM_API_REFERENCE.md.
@@ -13,6 +13,24 @@ _BASE = os.path.dirname(os.path.abspath(__file__))
 
 # ─────────────────────── Sessão / navegador ─────────────────
 USER_DATA_DIR = os.path.join(_BASE, "browser_profile")
+
+
+# ─────────────────────── Proxy (opcional, configurável pelo app) ──────────
+# Grava proxy.json {enabled, server, username, password}. Formato do Playwright.
+def _carregar_proxy():
+    import json
+    f = os.path.join(_BASE, "proxy.json")
+    if os.path.exists(f):
+        try:
+            d = json.load(open(f, encoding="utf-8"))
+            if d.get("enabled") and d.get("server"):
+                return {k: d[k] for k in ("server", "username", "password") if d.get(k)}
+        except Exception:
+            pass
+    return None
+
+
+PROXY = _carregar_proxy()
 HEADLESS = False
 USAR_CHROME_REAL = True       # usa o Chrome instalado (menos detectável, ajuda no login/reCAPTCHA)
 LOCALE = "pt-BR"
@@ -53,8 +71,9 @@ ACTIVE_HOURS = (9, 23)       # só roda em horário humano (com APLICAR_CAPS=Tru
 # Depois disso ele salva o último e retoma sozinho (ignora este valor).
 COMECAR_DE = "n.mondra"
 
-# Quantas atividades olhar (o feed traz ~90 de uma vez)
-SO_NOVOS_SEGUIDORES = True   # processa só notificações de "começou a seguir você"
+# Comportamento fixo: só processa "começou a seguir você" — o filtro é hardcoded em
+# ig.novos_seguidores (type == 3). Esta flag não é lida, fica só de registro.
+SO_NOVOS_SEGUIDORES = True
 
 # ─────────────────────────── Paths ──────────────────────────
 OUTPUT_DIR = os.path.join(_BASE, "output")

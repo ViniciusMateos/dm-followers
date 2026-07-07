@@ -108,6 +108,9 @@ class IG:
             viewport={"width": 1280, "height": 820},
             args=["--disable-blink-features=AutomationControlled"],
             ignore_default_args=["--enable-automation"])
+        if getattr(config, "PROXY", None):
+            kwargs["proxy"] = config.PROXY
+            log.info("🌐 Proxy ativo: %s", config.PROXY.get("server"))
         if getattr(config, "USAR_CHROME_REAL", False):
             kwargs["channel"] = "chrome"
         try:
