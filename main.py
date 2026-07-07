@@ -24,6 +24,7 @@ import os
 import re
 import sys
 import random
+import time
 import traceback
 from datetime import datetime
 
@@ -33,6 +34,21 @@ from safety import State, Guard, log, BloqueioDetectado, LimiteAtingido
 from ig import IG
 
 LOGS_ERRO_DIR = os.path.join(config.OUTPUT_DIR, "logs")
+
+_T_INICIO = time.monotonic()
+
+
+def _dur_run():
+    """Tempo total desta execução, formatado (ex: '3m 12s')."""
+    s = int(time.monotonic() - _T_INICIO)
+    h, r = divmod(s, 3600)
+    m, s = divmod(r, 60)
+    return f"{h}h {m}m {s}s" if h else (f"{m}m {s}s" if m else f"{s}s")
+
+
+def progresso(done, total, label=""):
+    """Marcador machine-readable pro backend/app desenharem a barra de progresso."""
+    print(f"[progress] {done} {total} {label}".rstrip(), flush=True)
 
 
 def _carregar_cookies(path):
@@ -82,6 +98,7 @@ def imprimir_saldo(guard, motivo=""):
     log.info("──────────────── SALDO DA EXECUÇÃO%s ────────────────", extra)
     log.info("   DMs enviadas .......... %d", guard.enviadas)
     log.info("   puladas (já enviou) ... %d", guard.puladas)
+    log.info("   tempo de execução ..... %s", _dur_run())
     log.info("─────────────────────────────────────────────────────")
 
 
@@ -169,7 +186,10 @@ def run(dry=False, start_from=None, start_oldest=False, debug=False, ignorar_jan
                      ", ".join("@" + c["username"] for c in candidatos[:10]) +
                      (" …" if len(candidatos) > 10 else ""))
 
-            for c in candidatos:
+            total = len(candidatos)
+            progresso(0, total, "iniciando")
+            for i, c in enumerate(candidatos):
+                progresso(i, total, f"@{c['username']}")
                 guard.pode_enviar()
                 texto = montar_mensagem(c["username"])
                 # navega como humano: abre o perfil da pessoa (com uma dwell)
@@ -192,6 +212,7 @@ def run(dry=False, start_from=None, start_oldest=False, debug=False, ignorar_jan
                 guard.enviadas += 1
                 log.info("✓ DM enviada → @%s", c["username"])
                 guard.pos_dm()
+            progresso(total, total, "concluído")
         except LimiteAtingido as e:
             log.info("Parando (cap atingido): %s", e)
         except BloqueioDetectado as e:
