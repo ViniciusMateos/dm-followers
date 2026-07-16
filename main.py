@@ -100,6 +100,8 @@ def imprimir_saldo(guard, motivo=""):
     log.info("   puladas (já enviou) ... %d", guard.puladas)
     log.info("   tempo de execução ..... %s", _dur_run())
     log.info("─────────────────────────────────────────────────────")
+    # marcador machine-readable pro histórico (vai pro stdout E pro run.log)
+    log.info("[saldo] enviadas=%d puladas=%d", guard.enviadas, guard.puladas)
 
 
 def tratar_erro(exc, titulo):
