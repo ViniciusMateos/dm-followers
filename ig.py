@@ -110,7 +110,7 @@ class IG:
             ignore_default_args=["--enable-automation"])
         if getattr(config, "PROXY", None):
             kwargs["proxy"] = config.PROXY
-            log.info("🌐 Proxy ativo: %s", config.PROXY.get("server"))
+            log.info("Proxy ativo: %s", config.PROXY.get("server"))
         if getattr(config, "USAR_CHROME_REAL", False):
             kwargs["channel"] = "chrome"
         try:

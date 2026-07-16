@@ -31,8 +31,16 @@ def _carregar_proxy():
 
 
 PROXY = _carregar_proxy()
-HEADLESS = False
-USAR_CHROME_REAL = True       # usa o Chrome instalado (menos detectável, ajuda no login/reCAPTCHA)
+
+
+def _envbool(nome, padrao):
+    v = os.environ.get(nome)
+    return padrao if v is None else v.strip().lower() in ("1", "true", "yes", "on")
+
+
+# Default = PC (headed). No SERVIDOR headless: IG_HEADLESS=1 e IG_CHROME_REAL=0 no .env.
+HEADLESS = _envbool("IG_HEADLESS", False)
+USAR_CHROME_REAL = _envbool("IG_CHROME_REAL", True)
 LOCALE = "pt-BR"
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
