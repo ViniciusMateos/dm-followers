@@ -77,11 +77,16 @@ def modo_importar_cookies(path):
     cookies = _carregar_cookies(path)
     log.info("Importando %d cookies de %s…", len(cookies), path)
     with IG() as ig:
-        if ig.importar_cookies(cookies):
-            log.info("✓ Sessão logada! Pode rodar --dry-run.")
-        else:
-            log.warning("Importou, mas não achei sessionid. Exporte os cookies do instagram.com "
-                        "COM a conta logada.")
+        ok = ig.importar_cookies(cookies)
+    if ok:
+        log.info("Sessão logada! Pode rodar --dry-run.")
+        return
+    # Sair != 0 aqui é obrigatório: quem chama é o app ("Conectar Instagram"), e ele decide
+    # pelo código de saída se avisa "conectado" ou "deu ruim". Saindo 0 numa falha, o app
+    # anunciava sessão conectada com o login inválido.
+    log.error("Importei os cookies mas a sessão NÃO está logada. Exporte de novo com a "
+              "conta logada no instagram.com (precisa de um sessionid válido).")
+    sys.exit(1)
 
 
 def montar_mensagem(username):
@@ -145,7 +150,11 @@ def escolher_candidatos(novos, state, start_from, start_oldest):
 
 
 def run(dry=False, start_from=None, start_oldest=False, debug=False, ignorar_janela=False):
-    state = State()
+    # O histórico é POR CONTA: cada conta tem a SUA lista de quem já recebeu DM. Sem isso,
+    # trocar de conta faz o bot herdar o histórico da anterior e achar que já falou com
+    # todo mundo (aconteceu: conta nova mandou só 2 DMs).
+    conta = config.conta_da_sessao()
+    state = State(config.state_file(conta))
     guard = Guard(state, dry_run=dry)
     try:
         guard.checar_janela(ignorar=ignorar_janela)
@@ -155,10 +164,41 @@ def run(dry=False, start_from=None, start_oldest=False, debug=False, ignorar_jan
 
     log.info("Abrindo Instagram (%s)…", "DRY-RUN" if dry else "AÇÃO REAL")
     with IG(dry_run=dry) as ig:
-        ig.ir("https://www.instagram.com/")
+        # nav de setup RESILIENTE: rodando 2 bots no MESMO túnel, a home (pesada) às vezes
+        # não carrega em 30s por contenção. Tenta 3x com folga (45s) em vez de "erro fatal" na
+        # primeira. Depois disso a DM é só fetch (não recarrega página), então basta abrir 1x.
+        aberto = False
+        for _tent in range(3):
+            try:
+                ig.ir("https://www.instagram.com/", timeout=45000)
+                aberto = True
+                break
+            except Exception as e:
+                log.warning("~ a home do IG demorou a abrir (%d/3): %s — repito",
+                            _tent + 1, str(e).splitlines()[0][:50])
+        if not aberto:
+            log.error("Não consegui abrir o Instagram (túnel congestionado?). Tenta de novo em "
+                      "instantes, ou roda um bot por vez.")
+            return
         if not ig.logado():
             log.error("Sem sessão logada. Rode `python main.py --login` primeiro.")
             return
+        # regrava a sessão a cada run: mantém o cookie fresco E garante que a PRÓXIMA run
+        # saiba qual conta é esta (é do arquivo de sessão que sai o ds_user_id)
+        ig.salvar_sessao()
+        # ds_user_id da conta REALMENTE logada NESTE browser (dos cookies do contexto) — NÃO do
+        # arquivo de sessão central, que virou RACY com 2 bots escrevendo junto e devolveu
+        # "conta desconhecida" → state-desconhecida.json → REMANDOU DM pra todo mundo. Fonte da
+        # verdade = o cookie deste browser. Se o arquivo deu outra coisa, reaponta o state AGORA.
+        conta_live = (ig._cookies() or {}).get("ds_user_id")
+        if conta_live and conta_live != conta:
+            conta = conta_live
+            state = State(config.state_file(conta))
+            guard.state = state
+        # QUAL conta está rodando — sempre, em toda run. Rodar com a conta errada sem
+        # perceber já custou caro (histórico de uma conta aplicado em outra).
+        log.info("Conta: @%s (%s) | histórico: %s", ig.usuario() or "?",
+                 conta or "id não identificado", os.path.basename(state.path))
         ig.carregar_tokens()
 
         try:
@@ -171,11 +211,16 @@ def run(dry=False, start_from=None, start_oldest=False, debug=False, ignorar_jan
                     json.dump(novos, f, ensure_ascii=False, indent=1)
                 log.info("debug: feed salvo em output/debug_seguidores.json")
 
-            # 1ª run (sem nada salvo): usa o COMECAR_DE do config se nada foi passado
+            # Conta SEM histórico = conta nova: varre TODOS os seguidores visíveis e faz o
+            # fluxo completo. Nada foi enviado por ESTA conta, então não há de onde "retomar".
+            # (O COMECAR_DE do config só vale se você mandar explicitamente — era um marco de
+            # quando o bot rodava numa conta só, e numa conta nova ele trava tudo: o usuário
+            # dele não está no feed, o bot não acha e não faz nada.)
             primeira_vez = state.data.get("last_timestamp", 0) == 0
-            if not start_from and not start_oldest and primeira_vez and getattr(config, "COMECAR_DE", None):
-                start_from = config.COMECAR_DE
-                log.info("Primeira run: começando a partir de @%s (config COMECAR_DE).", start_from)
+            if not start_from and not start_oldest and primeira_vez:
+                start_oldest = True
+                log.info("Conta sem histórico — varrendo todos os %d seguidores do feed.",
+                         len(novos))
 
             candidatos = escolher_candidatos(novos, state, start_from, start_oldest)
             # MAX_DMS_POR_RUN = 0 (ou caps off) → manda pra todos os novos
@@ -194,21 +239,30 @@ def run(dry=False, start_from=None, start_oldest=False, debug=False, ignorar_jan
                 progresso(i, total, f"@{c['username']}")
                 guard.pode_enviar()
                 texto = montar_mensagem(c["username"])
-                # navega como humano: abre o perfil da pessoa (com uma dwell)
-                ig.ir(f"https://www.instagram.com/{c['username']}/")
-                guard.dormir(config.DELAY_ACAO_UI, "abrindo perfil")
+                # SEM goto de página por pessoa. Visitar o perfil e "abrir a conversa" eram só
+                # dwell humano — e é JUSTO o que trava no proxy: um goto pesado que engasga deixa
+                # o Chromium preso e o page.evaluate seguinte pendura pra sempre. A DM vai por
+                # FETCH (criar_thread + enviar_dm), que não precisa carregar página nenhuma (o
+                # browser já está numa página logada do IG). Mantém só as PAUSAS pra ritmo humano.
+                guard.dormir(config.DELAY_ACAO_UI, "preparando")
+                thread = ig.criar_thread(c["pk"])
+                if not thread:
+                    log.warning("! não consegui abrir thread com @%s — pulando", c["username"])
+                    continue
+                # VERIFICAÇÃO DUPLA: olha DENTRO da conversa. Se a NOSSA DM já está lá, NÃO
+                # remanda — blindagem contra state zerado/errado (foi o que remandou pra todos).
+                if ig.ja_mandou_msg(thread, config.MARCA_TEMPLATE):
+                    log.info("• @%s já tem a nossa DM na conversa — pulando (verificação dupla)",
+                             c["username"])
+                    state.marcar_enviado(c["pk"], c["timestamp"])   # marca pra não rechecar
+                    guard.puladas = getattr(guard, "puladas", 0) + 1
+                    continue
+                guard.dormir(config.DELAY_ACAO_UI, "abrindo conversa")
                 if dry:
                     log.info("│ [dry] DM → @%s (pk %s)", c["username"], c["pk"])
                     log.info("│       %s", texto.replace("\n", " ⏎ ")[:120])
                     guard.enviadas += 1; guard.pos_dm_dry()
                     continue
-                thread = ig.criar_thread(c["pk"])
-                if not thread:
-                    log.warning("! não consegui abrir thread com @%s — pulando", c["username"])
-                    continue
-                # abre a conversa antes de mandar (humano)
-                ig.ir(f"https://www.instagram.com/direct/t/{thread}/")
-                guard.dormir(config.DELAY_ACAO_UI, "abrindo conversa")
                 ig.enviar_dm(thread, texto)        # levanta BloqueioDetectado se falhar
                 state.marcar_enviado(c["pk"], c["timestamp"])
                 guard.enviadas += 1
