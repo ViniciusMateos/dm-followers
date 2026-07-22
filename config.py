@@ -12,6 +12,15 @@ import os
 _BASE = os.path.dirname(os.path.abspath(__file__))
 
 # ─────────────────────── Sessão / navegador ─────────────────
+# Sessão do IG (cookies). Fica FORA do browser_profile de propósito: o Chromium
+# deste server não persiste cookie nenhum em disco (testado — nem os que o próprio
+# site seta sobrevivem a fechar/reabrir). Então a sessão vive aqui e é reinjetada a
+# cada abertura; o perfil serve só pra cache/fingerprint.
+# Sessão UNIVERSAL: UMA pra todos os bots (é a mesma conta de IG). Fica no dir pai comum
+# (quase_nada_bots/), não no dir do worker — assim TODOS os bots leem a MESMA sessão, sem
+# ninguém "importar num bot e copiar pros outros". Override por IG_SESSION_FILE.
+SESSION_FILE = os.environ.get("IG_SESSION_FILE") or os.path.join(
+    os.path.dirname(os.path.dirname(_BASE)), "session_cookies.json")
 USER_DATA_DIR = os.path.join(_BASE, "browser_profile")
 
 
@@ -60,6 +69,10 @@ MENSAGEM = (
     "Primeira compra no brechó tem desconto de 10% em qualquer item!"
 )
 
+# Âncora da VERIFICAÇÃO DUPLA: antes de enviar, o bot olha DENTRO da conversa e, se já tem
+# uma mensagem NOSSA contendo este trecho, NÃO remanda. É um pedaço FIXO do template (o @).
+MARCA_TEMPLATE = "brechoquasenadaa"
+
 # ───────────────────── LIMITES DE SEGURANÇA ─────────────────
 # Lista pequena (<50) → caps generosos pra processar tudo numa run. O kill-switch
 # segue ligado: se o IG bloquear no meio, para na hora e salva de onde parou.
@@ -73,7 +86,10 @@ PAUSA_LONGA_CADA = 0        # 0 = SEM pausa longa
 PAUSA_LONGA = (120, 300)    # (ignorado se PAUSA_LONGA_CADA = 0)
 DELAY_ACAO_UI = (1.5, 4.0)  # dwell ao abrir perfil / conversa
 
-ACTIVE_HOURS = (9, 23)       # só roda em horário humano (com APLICAR_CAPS=True)
+# Janela de horário: DESLIGADA por padrão — roda a QUALQUER hora. Ligue USAR_JANELA=True
+# pra limitar ao ACTIVE_HOURS abaixo (menos cara de bot de madrugada). Vinicius pediu sem.
+USAR_JANELA = False
+ACTIVE_HOURS = (9, 23)       # só vale se USAR_JANELA=True
 
 # 1ª RUN: de qual seguidor começar (do mais antigo dele pro mais recente).
 # Depois disso ele salva o último e retoma sozinho (ignora este valor).
@@ -87,3 +103,36 @@ SO_NOVOS_SEGUIDORES = True
 OUTPUT_DIR = os.path.join(_BASE, "output")
 STATE_FILE = os.path.join(OUTPUT_DIR, "state.json")
 LOG_FILE = os.path.join(OUTPUT_DIR, "run.log")
+
+
+def conta_da_sessao():
+    """ds_user_id da sessão salva — QUEM está logado agora.
+
+    O estado (quem já recebeu DM / quem já foi seguido) é POR CONTA: trocar de conta e
+    herdar o histórico da anterior faz o bot achar que já falou com todo mundo e não fazer
+    nada — ou pior, pular gente que nunca foi contatada por ESTA conta.
+
+    Lê do arquivo de sessão pra não precisar abrir o navegador antes de montar o State.
+    """
+    import json
+    try:
+        with open(SESSION_FILE, encoding="utf-8") as f:
+            for c in json.load(f):
+                if c.get("name") == "ds_user_id":
+                    v = str(c.get("value") or "").strip()
+                    if v:
+                        return v
+    except Exception:
+        pass
+    return ""
+
+
+def state_file(conta=""):
+    """Arquivo de estado DESTA conta.
+
+    Sem conta identificada NÃO cai no state.json antigo de propósito: herdar o histórico de
+    outra conta faz o bot pular gente que esta conta nunca contatou (já aconteceu). Melhor
+    começar limpo do que mentir sobre o que já foi feito.
+    """
+    nome = f"state-{conta}.json" if conta else "state-desconhecida.json"
+    return os.path.join(OUTPUT_DIR, nome)
